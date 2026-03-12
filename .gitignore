@@ -1,0 +1,15 @@
+# Data artifacts
+venv/
+.venv/
+# Virtual envs
+
+*.npy
+*.pth
+# Model and array artifacts
+
+*.py[cod]
+__pycache__/
+# Python cache
+
+data/
+

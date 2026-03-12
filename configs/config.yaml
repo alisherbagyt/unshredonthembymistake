@@ -1,0 +1,33 @@
+# shred_net master config
+
+pipeline:
+  input_dir: "data/raw"
+  output_image: "data/reconstruction.tiff"
+  debug_dir: "data/debug"
+
+segmentation:
+  method: "threshold"
+  binary_threshold: 0        # 0 = otsu auto-detection (best for most scans)
+  min_fragment_area: 2000    # raised — filters small artifacts, keeps real chunks
+
+embeddings:
+  backbone: "resnet18"
+  patch_size: 64
+  patch_stride: 16           # denser sampling along edges = better matching
+  embedding_dim: 512
+  device: "cpu"              # change to "cuda" if gpu available
+
+retrieval:
+  index_type: "flat"
+  top_k: 10
+  hnsw_m: 32
+
+solver:
+  method: "greedy"
+  min_match_score: 0.3       # lower than v1 — rectangular chunks have weaker edge signals
+  max_iterations: 1000
+
+rendering:
+  method: "simple"
+  canvas_padding: 50
+  background_color: [255, 255, 255]

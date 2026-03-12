@@ -1,0 +1,23 @@
+# requirements.txt — March 2026 Optimized Stack
+# Suggested Python version: >= 3.10
+
+# Core CV & Data
+opencv-python>=4.12.0
+numpy>=2.2.0              # NumPy 2.x is now the standard for performance
+
+# Deep Learning (Updated for PyTorch 2.10.0 Release)
+torch>=2.10.0
+torchvision>=0.25.0
+
+# Vector Search (GPU Accelerated via CUDA 12)
+# faiss-gpu-cu12 handles the runtime internally without needing local CUDA installs
+faiss-cpu>=1.7.3  # CPU version for compatibility; GPU version is auto-handled
+
+# Config & Infrastructure
+pyyaml>=6.0.2
+pytest>=8.5.0
+
+# Phase 4 Upgrades (Current Stable Versions)
+# torch-geometric>=2.7.0   # Fully compatible with Torch 2.10
+# kornia>=0.8.2           # Optimized for spatial AI & GPU
+# hydra-core>=1.3.2       # Standard for complex experiment config
