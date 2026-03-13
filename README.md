@@ -1,6 +1,6 @@
-# unshredonthembymistake
+# unshred on them by mistake
 
-Minimal, runnable scaffold for a 6-phase document unshredding pipeline.
+MVP still... in process.
 
 ## Structure
 
@@ -24,4 +24,3 @@ python run_pipeline.py --config configs/config.yaml
 Drop raw scans in `data/raw/` (`.png`, `.jpg`, `.jpeg`).
 
 Pipeline output defaults to `data/processed/reconstruction.png`.
-
