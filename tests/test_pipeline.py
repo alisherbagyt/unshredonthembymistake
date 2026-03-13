@@ -2,6 +2,12 @@
 # contract tests — validate the shape and type of every stage's output.
 # no real images needed; all data is synthetic.
 # run: pytest tests/ -v
+#
+# windows: KMP_DUPLICATE_LIB_OK must be set before any import that loads torch
+# or faiss. setting here at module level so pytest picks it up before any test.
+
+import os
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import pytest

@@ -63,7 +63,7 @@ def solve_global_layout(frags: List[fragment], cfg: dict) -> List[fragment]:
         x0,
         args=(edges, n),
         method="L-BFGS-B",
-        options={"maxiter": sc["pgo_max_iter"], "ftol": sc["pgo_tol"], "disp": False},
+        options={"maxiter": sc["pgo_max_iter"], "ftol": sc["pgo_tol"]},
     )
 
     poses = result.x.reshape(n, 3)

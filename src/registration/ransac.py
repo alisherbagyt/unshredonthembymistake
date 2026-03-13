@@ -113,9 +113,12 @@ def _solve_se2_minimal(src: np.ndarray, dst: np.ndarray) -> Tuple[float, float, 
     d_src = src[1] - src[0]
     d_dst = dst[1] - dst[0]
 
+    # theta = angle from d_src to d_dst = atan2(src × dst, src · dst)
+    # cross product src × dst gives the signed rotation src must undergo to reach dst.
+    # NOTE: order matters — dst × src gives -theta (wrong sign, previously the bug here).
     theta = np.arctan2(
-        d_dst[0] * d_src[1] - d_dst[1] * d_src[0],   # cross product
-        d_dst[0] * d_src[0] + d_dst[1] * d_src[1],   # dot product
+        d_src[0] * d_dst[1] - d_src[1] * d_dst[0],   # cross: src × dst
+        d_src[0] * d_dst[0] + d_src[1] * d_dst[1],   # dot
     )
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)
