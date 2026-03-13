@@ -1,33 +1,54 @@
-# shred_net master config
+# shred_net v2 — every tunable lives here, nothing hardcoded in source.
+# upgrade any stage by flipping a single key.
 
 pipeline:
-  input_dir: "data/raw"
+  input_dir:    "data/raw"
   output_image: "data/reconstruction.tiff"
-  debug_dir: "data/debug"
+  debug_dir:    "data/debug"
 
 segmentation:
-  method: "threshold"
-  binary_threshold: 0        # 0 = otsu auto-detection (best for most scans)
-  min_fragment_area: 2000    # raised — filters small artifacts, keeps real chunks
+  method:            "threshold"   # "threshold" | "unet" (future)
+  min_fragment_area: 2000          # px² — drops noise blobs
+  contour_n_points:  512           # equidistant resampled contour length
+  adaptive_block:    51            # adaptive threshold block size (odd)
+  adaptive_c:        10            # adaptive threshold constant
 
-embeddings:
-  backbone: "resnet18"
-  patch_size: 64
-  patch_stride: 16           # denser sampling along edges = better matching
-  embedding_dim: 512
-  device: "cpu"              # change to "cuda" if gpu available
+features:
+  device:        "cpu"             # "cuda" for gpu
+  geo_dim:       64                # geometry branch output dim
+  tex_dim:       128               # texture branch output dim
+  embed_dim:     256               # fused eac-net output dim per contour pt
+  strip_width:   16                # px wide texture strip around contour
+  weights_path:  null              # null = random init; set after training
 
-retrieval:
-  index_type: "flat"
-  top_k: 10
-  hnsw_m: 32
+matching:
+  index_type:    "flat"            # "flat" | "hnsw"
+  top_k:         10                # candidate fragments per fragment
+  hnsw_m:        32
+
+registration:
+  ransac_iters:      2000          # ransac iterations per candidate pair
+  ransac_inlier_thr: 3.0           # px — inlier distance threshold
+  min_inliers:       6             # reject pairs with fewer inliers
+  min_score:         0.25          # minimum compatibility to keep an edge
 
 solver:
-  method: "greedy"
-  min_match_score: 0.3       # lower than v1 — rectangular chunks have weaker edge signals
-  max_iterations: 1000
+  method:         "pgo"            # "pgo" (pose graph) | "greedy" (fast fallback)
+  pgo_max_iter:   500
+  pgo_tol:        1e-6
 
 rendering:
-  method: "simple"
-  canvas_padding: 50
+  method:          "simple"        # "simple" | "poisson"
+  canvas_padding:  60
   background_color: [255, 255, 255]
+
+training:
+  data_dir:      "data/training_docs"
+  out_dir:       "data/training_fragments"
+  fragments_per_doc: 6             # synthetic fragments to cut per document
+  noise_std:     5.0               # px gaussian noise on cut path
+  batch_size:    64
+  lr:            1e-4
+  epochs:        50
+  temperature:   0.07              # infonce temperature τ
+  checkpoint_dir: "checkpoints"

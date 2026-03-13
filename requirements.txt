@@ -1,23 +1,25 @@
-# requirements.txt — March 2026 Optimized Stack
-# Suggested Python version: >= 3.10
+# shred_net v2 requirements — grouped by pipeline stage
 
-# Core CV & Data
-opencv-python>=4.12.0
-numpy>=2.2.0              # NumPy 2.x is now the standard for performance
+# core cv
+opencv-python>=4.9.0
+numpy>=1.26.0
+scipy>=1.12.0          # pose graph optimization (L-BFGS-B)
 
-# Deep Learning (Updated for PyTorch 2.10.0 Release)
-torch>=2.10.0
-torchvision>=0.25.0
+# eac-net (feature extraction + training)
+torch>=2.2.0
+torchvision>=0.17.0
 
-# Vector Search (GPU Accelerated via CUDA 12)
-# faiss-gpu-cu12 handles the runtime internally without needing local CUDA installs
-faiss-cpu>=1.7.3  # CPU version for compatibility; GPU version is auto-handled
+# retrieval
+faiss-cpu>=1.8.0       # swap to faiss-gpu on cuda machines
 
-# Config & Infrastructure
-pyyaml>=6.0.2
-pytest>=8.5.0
+# config
+pyyaml>=6.0
 
-# Phase 4 Upgrades (Current Stable Versions)
-# torch-geometric>=2.7.0   # Fully compatible with Torch 2.10
-# kornia>=0.8.2           # Optimized for spatial AI & GPU
-# hydra-core>=1.3.2       # Standard for complex experiment config
+# testing
+pytest>=8.0.0
+
+# ── future / optional ──────────────────────────────────────────────────────────
+torch-geometric>=2.5.0    # if upgrading solver to full GNN
+g2o-python                # industrial-grade pose graph optimization
+kornia>=0.7.0             # differentiable cv ops (GPU spatial transforms)
+hydra-core>=1.3.0         # advanced config composition (replaces pyyaml)
