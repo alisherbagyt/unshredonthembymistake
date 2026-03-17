@@ -1,25 +1,39 @@
-# shred_net v2 requirements — grouped by pipeline stage
+# unshred-on-them-by-mistake — requirements for Python 3.12 + RTX 3050
+# install order matters — run the commands in README / setup notes below,
+# do NOT just pip install -r requirements.txt directly (torch needs its own index).
+#
+# ── setup commands (run these in order in your new venv) ──────────────────────
+#
+#   1. pip install --upgrade pip
+#
+#   2. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#      (cu124 = CUDA 12.4 — compatible with driver 581.57 / CUDA runtime 13.0)
+#
+#   3. pip install -r requirements.txt
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 # core cv
-opencv-python>=4.9.0
-numpy>=1.26.0
-scipy>=1.12.0          # pose graph optimization (L-BFGS-B)
+opencv-python>=4.10.0
 
-# eac-net (feature extraction + training)
-torch>=2.2.0
-torchvision>=0.17.0
+# numerical
+numpy>=2.0.0
+scipy>=1.13.0
 
-# retrieval
-faiss-cpu>=1.8.0       # swap to faiss-gpu on cuda machines
+# retrieval — use faiss-gpu if available for your cuda, else cpu is fine for dev
+# faiss-gpu wheels for cu12 are on conda; pip only has cpu builds
+faiss-cpu>=1.8.0
 
 # config
-pyyaml>=6.0
+pyyaml>=6.0.2
+
+# progress bar (used by trainer.py)
+tqdm>=4.66.0
 
 # testing
 pytest>=8.0.0
 
-# ── future / optional ──────────────────────────────────────────────────────────
-torch-geometric>=2.5.0    # if upgrading solver to full GNN
-g2o-python                # industrial-grade pose graph optimization
-kornia>=0.7.0             # differentiable cv ops (GPU spatial transforms)
-hydra-core>=1.3.0         # advanced config composition (replaces pyyaml)
+# ── note: torch + torchvision installed separately via cu124 index (step 2) ──
+# ── optional / future ─────────────────────────────────────────────────────────
+# kornia>=0.7.0         # differentiable cv ops
+# hydra-core>=1.3.0     # advanced config composition

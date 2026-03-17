@@ -1,4 +1,4 @@
-# shred_net v2 — every tunable lives here, nothing hardcoded in source.
+# every tunable lives here, nothing hardcoded in source.
 # upgrade any stage by flipping a single key.
 
 pipeline:
@@ -14,12 +14,12 @@ segmentation:
   adaptive_c:        10            # adaptive threshold constant
 
 features:
-  device:        "cpu"             # "cuda" for gpu
+  device:        "cuda"            # switched from cpu — use your RTX 3050
   geo_dim:       64                # geometry branch output dim
   tex_dim:       128               # texture branch output dim
   embed_dim:     256               # fused eac-net output dim per contour pt
   strip_width:   16                # px wide texture strip around contour
-  weights_path:  null              # null = random init; set after training
+  weights_path:  null              # set to "checkpoints/eac_net_best.pt" after training
 
 matching:
   index_type:    "flat"            # "flat" | "hnsw"
@@ -35,7 +35,7 @@ registration:
 solver:
   method:         "pgo"            # "pgo" (pose graph) | "greedy" (fast fallback)
   pgo_max_iter:   500
-  pgo_tol:        1e-6
+  pgo_tol:        0.000001         # 1e-6 as decimal — pyyaml reads 1e-6 as string
 
 rendering:
   method:          "simple"        # "simple" | "poisson"
@@ -45,10 +45,19 @@ rendering:
 training:
   data_dir:      "data/training_docs"
   out_dir:       "data/training_fragments"
-  fragments_per_doc: 6             # synthetic fragments to cut per document
-  noise_std:     5.0               # px gaussian noise on cut path
-  batch_size:    64
-  lr:            1e-4
-  epochs:        50
+  fragments_per_doc: 6
+  noise_std:     5.0
+  # ── batch size note ────────────────────────────────────────────────────────
+  # infonce similarity matrix size = (batch_size × 512)² × 2 bytes (fp16)
+  # rtx 3050 4gb vram:
+  #   batch_size=8  → 4096×4096 matrix = 32MB  ✓ safe
+  #   batch_size=16 → 8192×8192 matrix = 128MB ✓ safe (try if 8 is stable)
+  #   batch_size=64 → 32768×32768       = 2GB  ✗ will OOM
+  # accum_steps multiplies effective batch without extra vram cost:
+  #   batch_size=8 × accum_steps=4 = effective batch of 32
+  batch_size:    8
+  accum_steps:   4                 # effective batch = batch_size × accum_steps = 32
+  lr:            0.0001            # 1e-4 as decimal
+  epochs:        50                # extended from 50 for better convergence
   temperature:   0.07              # infonce temperature τ
   checkpoint_dir: "checkpoints"
