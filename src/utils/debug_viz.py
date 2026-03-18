@@ -30,7 +30,8 @@ def save_match_debug(frags: List[fragment], out_dir: str, top_n: int = 3):
         )
         lines.append(line)
         print(f"[debug] {line}")
-    with open(f"{out_dir}/match_scores.txt", "w") as f:
+    # Fix: Added encoding="utf-8" to support the → character on Windows
+    with open(f"{out_dir}/match_scores.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"[debug] match scores → {out_dir}/match_scores.txt")
 
@@ -47,7 +48,8 @@ def save_pose_debug(frags: List[fragment], out_dir: str):
         )
         lines.append(f"{frag.id:30s} pose={pose}  edges=[{edge_summary}]")
         print(f"[debug] {lines[-1]}")
-    with open(f"{out_dir}/pose_graph.txt", "w") as f:
+    # Fix: Added encoding="utf-8"
+    with open(f"{out_dir}/pose_graph.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"[debug] pose graph → {out_dir}/pose_graph.txt")
 

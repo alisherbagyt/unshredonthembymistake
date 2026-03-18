@@ -20,7 +20,9 @@ from src.data_models import fragment
 
 def retrieve_candidates(frags: List[fragment], cfg: dict) -> List[fragment]:
     """find top-k nearest fragments per fragment by mean boundary embedding."""
-    rc    = cfg["retrieval"]
+    rc = cfg.get("retrieval") or cfg.get("matching")
+    if rc is None:
+        raise KeyError("missing config: expected 'retrieval' or 'matching'")
     top_k = rc["top_k"]
     itype = rc.get("index_type", "flat")
 

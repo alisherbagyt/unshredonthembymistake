@@ -17,6 +17,7 @@
 # solved via scipy.optimize.minimize (L-BFGS-B) — no heavy graph-slam library needed.
 # for >100 fragments, swap for g2o or gtsam.
 
+
 import numpy as np
 from scipy.optimize import minimize
 from typing import List, Dict, Tuple
@@ -36,11 +37,18 @@ def solve_global_layout(frags: List[fragment], cfg: dict) -> List[fragment]:
     ids      = [f.id for f in frags]
     n        = len(frags)
 
+    # NEW: pull the min inlier threshold from config (default 12)
+    pgo_min_inl = cfg.get("registration", {}).get("pgo_min_inliers", 12)
+
     # build edge list from pairwise_transforms
     edges: List[Tuple[int, int, float, float, float, float]] = []
     for frag in frags:
         i = ids.index(frag.id)
         for other_id, (tx, ty, theta, n_inl) in (frag.pairwise_transforms or {}).items():
+            # NEW: Filter out weak edges
+            if n_inl < pgo_min_inl:
+                continue
+
             if other_id not in frag_map:
                 continue
             j      = ids.index(other_id)
@@ -54,9 +62,6 @@ def solve_global_layout(frags: List[fragment], cfg: dict) -> List[fragment]:
 
     # initial state: all poses at origin
     x0 = np.zeros(n * 3, dtype=np.float64)
-
-    # anchor fragment 0 at origin — fixes gauge freedom (absolute position)
-    # we achieve this by zeroing its gradient (fixed in the cost function)
 
     result = minimize(
         _pgo_cost,
@@ -83,51 +88,38 @@ def solve_global_layout(frags: List[fragment], cfg: dict) -> List[fragment]:
 # ── pgo cost function ─────────────────────────────────────────────────────────
 
 def _pgo_cost(x: np.ndarray, edges: list, n: int) -> float:
-    """sum of weighted squared se(2) pose composition errors.
-
-    for edge (i, j) with observed relative transform T_ij = (tx, ty, theta):
-    predicted relative = compose(inv(pose_i), pose_j)
-    error = euclidean distance between predicted and observed
-    """
-    poses = x.reshape(n, 3)   # (n, 3) — [tx, ty, theta]
+    poses = x.reshape(n, 3)
     cost  = 0.0
 
     for i, j, tx_obs, ty_obs, theta_obs, weight in edges:
-        pi = poses[i]   # [tx_i, ty_i, theta_i]
+        pi = poses[i]
         pj = poses[j]
 
-        # relative transform predicted by current poses: T_i^{-1} ∘ T_j
         dtheta = pj[2] - pi[2]
         cos_i  = np.cos(-pi[2])
         sin_i  = np.sin(-pi[2])
         dtx    = cos_i * (pj[0] - pi[0]) - sin_i * (pj[1] - pi[1])
         dty    = sin_i * (pj[0] - pi[0]) + cos_i * (pj[1] - pi[1])
 
-        # se(2) error: translation error + angular error
         err_t  = (dtx - tx_obs)**2 + (dty - ty_obs)**2
         err_r  = (_wrap_angle(dtheta - theta_obs))**2
 
-        cost  += weight * (err_t + err_r)
+        cost   += weight * (err_t + err_r)
 
-    # anchor: strongly penalize pose 0 moving from origin
     cost += 1e6 * (poses[0, 0]**2 + poses[0, 1]**2 + poses[0, 2]**2)
-
     return cost
 
 
 def _wrap_angle(a: float) -> float:
-    """wrap angle to [-π, π]."""
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
 # ── greedy fallback ───────────────────────────────────────────────────────────
 
 def _greedy_fallback(frags: List[fragment], offset: int = 0):
-    """place fragments in a grid — used when pgo has no edges or as fallback."""
     placed = set()
     frag_map = {f.id: f for f in frags}
 
-    # try to chain via highest-confidence pairwise transforms
     if frags and frags[0].global_pose is None:
         frags[0].global_pose = (0.0, 0.0, 0.0)
     placed.add(frags[0].id)
@@ -138,7 +130,6 @@ def _greedy_fallback(frags: List[fragment], offset: int = 0):
             if other_id in placed:
                 anchor = frag_map[other_id]
                 ax, ay, at = anchor.global_pose
-                # compose transforms: global_pose of frag = anchor_pose ∘ relative
                 new_theta = at + theta
                 cos_a, sin_a = np.cos(at), np.sin(at)
                 new_tx = ax + cos_a * tx - sin_a * ty

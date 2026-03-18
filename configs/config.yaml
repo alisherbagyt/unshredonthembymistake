@@ -3,42 +3,100 @@
 
 pipeline:
   input_dir:    "data/raw"
-  output_image: "data/reconstruction.tiff"
+  output_image: "data/reconstruction.tiff"   # MUST include filename + .tiff extension
   debug_dir:    "data/debug"
 
 segmentation:
   method:            "threshold"   # "threshold" | "unet" (future)
-  min_fragment_area: 2000          # px² — drops noise blobs
-  contour_n_points:  512           # equidistant resampled contour length
-  adaptive_block:    51            # adaptive threshold block size (odd)
-  adaptive_c:        10            # adaptive threshold constant
+
+  # ── area filter ───────────────────────────────────────────────────────────
+  # relative fraction of image area.
+  # 0.01 = 1% minimum. at 3534×4936 (~17.4M px) that is ~174 000 px².
+  # this safely excludes noise while keeping even small torn pieces.
+  # lower to 0.005 if you have very small fragments.
+  min_fragment_area: 0.01
+  max_fragment_area: 0.95          # ignore blobs > 95% of image
+
+  # ── shape filters ─────────────────────────────────────────────────────────
+  min_solidity:      0.20          # area/convex_hull_area
+  max_aspect_ratio:  10.0
+
+  # ── contour resampling ────────────────────────────────────────────────────
+  contour_n_points:  512
+
+  # ── foreground detection ──────────────────────────────────────────────────
+  # switched from adaptive threshold to Otsu global threshold.
+  # reason: paper (light) on dark background is a GLOBAL contrast difference.
+  # Otsu finds the optimal single threshold to separate light vs dark globally.
+  # adaptive threshold was designed for ink-on-paper (local contrast) — wrong tool here.
+  #
+  # clahe_equalise: apply contrast equalisation before thresholding.
+  # helps with yellowed/aged paper or uneven scanner lighting. keep True.
+  clahe_equalise:    true
+  #
+  # otsu_offset: shift Otsu's auto-detected threshold up (+) or down (-).
+  # 0 = use Otsu exactly. try +10 if background leaks into fragments.
+  # try -10 if fragments are not fully detected.
+  otsu_offset:       0
+
+  # ── morphological cleanup ─────────────────────────────────────────────────
+  # morph_close_size: fills text/ink holes inside fragment body.
+  # IMPORTANT: this runs BEFORE watershed. larger = more hole-filling,
+  # but if set too large it bridges gaps and defeats the watershed.
+  # 15px is a good balance for 300dpi archival scans.
+  # if fragments still split due to dense text: try 21 or 31.
+  morph_close_size:  15
+  morph_close_iters: 3
+  morph_open_size:   5             # removes noise dots
+  morph_open_iters:  2
+
+  # ── watershed parameters ──────────────────────────────────────────────────
+  # watershed separates touching fragments using the distance transform.
+  # it works by finding the "centre" of each fragment and growing regions
+  # outward until they meet — the meeting line is the separation boundary.
+  #
+  # watershed_dist_thresh: how deep into a fragment a pixel must be (as a
+  # fraction of the maximum depth) to count as a seed centre.
+  # higher = fewer, more conservative seeds = less splitting.
+  # lower = more seeds = more splitting (may over-split one real fragment).
+  # start at 0.4. if fragments are cut in half: raise to 0.5 or 0.6.
+  # if touching fragments are not separated: lower to 0.3.
+  watershed_dist_thresh: 0.4
+  #
+  # watershed_min_dist: minimum separation (px) between seed centres.
+  # prevents two seeds from appearing inside one large fragment.
+  # at 300dpi, 30px is about 2.5mm — reasonable minimum fragment width.
+  # if large fragments are being split: raise to 50 or 80.
+  # if small fragments are not separated: lower to 15.
+  watershed_min_dist:    30
 
 features:
-  device:        "cuda"            # switched from cpu — use your RTX 3050
-  geo_dim:       64                # geometry branch output dim
-  tex_dim:       128               # texture branch output dim
-  embed_dim:     256               # fused eac-net output dim per contour pt
-  strip_width:   16                # px wide texture strip around contour
-  weights_path:  null              # set to "checkpoints/eac_net_best.pt" after training
+  device:        "cuda"
+  geo_dim:       64
+  tex_dim:       128
+  embed_dim:     256
+  strip_width:   16
+  weights_path:  "checkpoints/eac_net_best.pt"
 
 matching:
-  index_type:    "flat"            # "flat" | "hnsw"
-  top_k:         10                # candidate fragments per fragment
+  index_type:    "flat"
+  top_k:         10
   hnsw_m:        32
 
 registration:
-  ransac_iters:      2000          # ransac iterations per candidate pair
-  ransac_inlier_thr: 3.0           # px — inlier distance threshold
-  min_inliers:       6             # reject pairs with fewer inliers
-  min_score:         0.25          # minimum compatibility to keep an edge
+  ransac_iters:      2000
+  ransac_inlier_thr: 3.0
+  min_inliers:       6
+  min_score:         0.25
+  pgo_min_inliers:   6
 
 solver:
-  method:         "pgo"            # "pgo" (pose graph) | "greedy" (fast fallback)
+  method:         "pgo"
   pgo_max_iter:   500
-  pgo_tol:        0.000001         # 1e-6 as decimal — pyyaml reads 1e-6 as string
+  pgo_tol:        0.000001
 
 rendering:
-  method:          "simple"        # "simple" | "poisson"
+  method:          "simple"
   canvas_padding:  60
   background_color: [255, 255, 255]
 
@@ -47,17 +105,9 @@ training:
   out_dir:       "data/training_fragments"
   fragments_per_doc: 6
   noise_std:     5.0
-  # ── batch size note ────────────────────────────────────────────────────────
-  # infonce similarity matrix size = (batch_size × 512)² × 2 bytes (fp16)
-  # rtx 3050 4gb vram:
-  #   batch_size=8  → 4096×4096 matrix = 32MB  ✓ safe
-  #   batch_size=16 → 8192×8192 matrix = 128MB ✓ safe (try if 8 is stable)
-  #   batch_size=64 → 32768×32768       = 2GB  ✗ will OOM
-  # accum_steps multiplies effective batch without extra vram cost:
-  #   batch_size=8 × accum_steps=4 = effective batch of 32
   batch_size:    8
-  accum_steps:   4                 # effective batch = batch_size × accum_steps = 32
-  lr:            0.0001            # 1e-4 as decimal
-  epochs:        50                # extended from 50 for better convergence
-  temperature:   0.07              # infonce temperature τ
+  accum_steps:   4
+  lr:            0.0001
+  epochs:        20
+  temperature:   0.07
   checkpoint_dir: "checkpoints"

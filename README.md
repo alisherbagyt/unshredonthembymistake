@@ -24,3 +24,13 @@ python run_pipeline.py --config configs/config.yaml
 Drop raw scans in `data/raw/` (`.png`, `.jpg`, `.jpeg`).
 
 Pipeline output defaults to `data/processed/reconstruction.png`.
+
+## Interactive CLI
+
+```powershell
+python run_interactive.py
+```
+
+Prompts for an input file or folder, optional pretrained weights, output path, and a debug toggle.
+When debug is enabled, progress artifacts are saved under `data/debug/` (segmentation crops,
+match scores, pose graph stats, and a layout map).

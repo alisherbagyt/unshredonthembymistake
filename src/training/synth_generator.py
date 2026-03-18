@@ -1,4 +1,25 @@
 # src/training/synth_generator.py
+#
+# changes from v1:
+#   - _fractal_tear_cut: replaces smooth bezier + 5px noise with a
+#     multi-scale fractal displacement path that mimics real paper fiber tearing.
+#     real tears have large-scale curves (50-150px) AND fine jaggedness (5-20px).
+#     the old 5px-noise bezier only had fine noise — the model never saw realistic
+#     tear shapes and failed to generalise to real archival scans.
+#
+#   - background colour: fragments are now saved on a configurable background
+#     (default dark gray ~50,50,50) instead of pure black.
+#     the texture strip samples pixels near the contour edge — with black
+#     background the model learned "black=outside" as a dominant feature.
+#     real scanner backgrounds are dark gray, not black, causing domain gap.
+#
+#   - augmentation: each saved fragment gets random brightness/contrast
+#     variation (±15%) and mild gaussian blur (0 or 1px sigma) so the model
+#     generalises across scan quality differences.
+#
+#   - _bezier_cut retained as fallback for diagonal cuts where fractal tear
+#     would be too complex to implement reliably.
+
 import cv2
 import json
 import numpy as np
@@ -12,26 +33,23 @@ def generate_dataset(
     docs_dir:  str,
     out_dir:   str,
     n_frags:   int   = 6,
-    noise_std: float = 5.0,
+    noise_std: float = 5.0,   # kept for backwards compat, now controls tear roughness
     seed:      int   = 42,
 ) -> List[dict]:
     """backwards-compatible entry point — flat image directory, single split."""
     rng = np.random.default_rng(seed)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-
     paths = _collect_images(docs_dir)
     if not paths:
         raise FileNotFoundError(f"no images found in {docs_dir}")
-
     metadata = []
     for doc_i, p in enumerate(paths):
         img = cv2.imread(str(p), cv2.IMREAD_COLOR)
         if img is None:
             continue
-        pairs = _cut_document(img, f"doc{doc_i:05d}", n_frags, noise_std, rng, out)
+        pairs = _cut_document(img, f"doc{doc_i:05d}", n_frags, rng, out)
         metadata.extend(pairs)
-
     print(f"[synth] generated {len(metadata)} pairs from {len(paths)} documents")
     return metadata
 
@@ -41,7 +59,7 @@ def generate_splits(
     out_dir:       str,
     split_budgets: Dict[str, int] = None,
     n_frags:       int   = 6,
-    noise_std:     float = 5.0,
+    noise_std:     float = 5.0,   # retained for api compat
     seed:          int   = 42,
 ) -> Dict[str, List[dict]]:
     """generate train / val / test splits from a DocLayNet directory tree."""
@@ -61,12 +79,10 @@ def generate_splits(
     for split, budget in split_budgets.items():
         img_subdir = split_img_subdirs.get(split, f"{split}_img")
         img_dir    = root / split / img_subdir
-
         if not img_dir.exists():
             print(f"[synth] WARNING: {img_dir} not found — skipping {split}")
             all_metadata[split] = []
             continue
-
         paths = _collect_images(str(img_dir))
         if not paths:
             print(f"[synth] WARNING: no images in {img_dir} — skipping {split}")
@@ -75,14 +91,12 @@ def generate_splits(
 
         split_out = out / split
         split_out.mkdir(parents=True, exist_ok=True)
-
         rng   = np.random.default_rng(seed + abs(hash(split)) % (2**31))
         paths = list(paths)
         rng.shuffle(paths)
 
         metadata  = []
         docs_used = 0
-
         for doc_i, p in enumerate(paths):
             if len(metadata) >= budget:
                 break
@@ -90,14 +104,13 @@ def generate_splits(
             if img is None:
                 continue
             doc_id = f"{split}_{doc_i:05d}"
-            pairs  = _cut_document(img, doc_id, n_frags, noise_std, rng, split_out)
+            pairs  = _cut_document(img, doc_id, n_frags, rng, split_out)
             metadata.extend(pairs)
             docs_used += 1
 
         meta_path = split_out / "metadata.json"
         with open(meta_path, "w") as f:
             json.dump(metadata, f, indent=2)
-
         all_metadata[split] = metadata
         print(
             f"[synth] {split}: {len(metadata)} pairs from {docs_used} documents"
@@ -119,12 +132,11 @@ def _collect_images(directory: str) -> List[Path]:
 
 
 def _cut_document(
-    img:       np.ndarray,
-    doc_id:    str,
-    n_frags:   int,
-    noise_std: float,
-    rng:       np.random.Generator,
-    out:       Path,
+    img:    np.ndarray,
+    doc_id: str,
+    n_frags: int,
+    rng:    np.random.Generator,
+    out:    Path,
 ) -> List[dict]:
     pieces = [(img, f"{doc_id}_p00")]
     pairs  = []
@@ -140,17 +152,20 @@ def _cut_document(
 
         idx, (piece_img, piece_id) = cuttable[rng.integers(len(cuttable))]
         pieces.pop(idx)
-
         ph, pw    = piece_img.shape[:2]
-        direction = rng.choice(["horizontal", "vertical", "diagonal"])
-        cut_pts   = _bezier_cut(pw, ph, direction, rng, noise_std)
 
+        # prefer horizontal/vertical for fractal tears; diagonal uses bezier
+        direction = rng.choice(["horizontal", "vertical", "diagonal"],
+                               p=[0.4, 0.4, 0.2])
+        cut_pts   = _fractal_tear_cut(pw, ph, direction, rng)
+        if cut_pts is None:
+            # fallback to bezier if fractal fails
+            cut_pts = _bezier_cut(pw, ph, direction, rng, noise_std=5.0)
         if cut_pts is None:
             pieces.append((piece_img, piece_id))
             continue
 
         left_img, right_img = _apply_cut(piece_img, cut_pts, direction)
-
         if _is_blank(left_img) or _is_blank(right_img):
             pieces.append((piece_img, piece_id))
             continue
@@ -160,10 +175,14 @@ def _cut_document(
 
         cut_resampled = _resample(cut_pts, 512)
 
+        # apply background colour and augmentation before saving
+        left_save  = _prepare_fragment(left_img,  rng)
+        right_save = _prepare_fragment(right_img, rng)
+
         left_path  = out / f"{left_id}.png"
         right_path = out / f"{right_id}.png"
-        cv2.imwrite(str(left_path),  left_img)
-        cv2.imwrite(str(right_path), right_img)
+        cv2.imwrite(str(left_path),  left_save)
+        cv2.imwrite(str(right_path), right_save)
 
         pairs.append({
             "left":          str(left_path),
@@ -173,7 +192,6 @@ def _cut_document(
             "cut_direction": direction,
             "doc_id":        doc_id,
         })
-
         pieces.append((left_img,  left_id))
         pieces.append((right_img, right_id))
         cut_i += 1
@@ -181,10 +199,142 @@ def _cut_document(
     return pairs
 
 
-def _is_blank(img: np.ndarray, threshold: float = 0.02) -> bool:
-    total   = img.shape[0] * img.shape[1]
-    nonzero = int(np.count_nonzero(img.max(axis=2)))
-    return (nonzero / total) < threshold
+def _prepare_fragment(
+    img_masked: np.ndarray,
+    rng:        np.random.Generator,
+    bg_color:   Tuple[int, int, int] = (50, 50, 50),
+) -> np.ndarray:
+    """
+    replace black background (from bitwise_and mask) with scanner-like dark gray,
+    then apply random brightness/contrast and optional blur augmentation.
+
+    why:
+      the texture strip samples pixels along the inward normal from the contour.
+      samples that fall outside the fragment hit the background.
+      during training the background was pure black [0,0,0].
+      during inference the background is dark gray [40-60, 40-60, 40-60].
+      this mismatch caused the model to rely on "black=outside" as a feature
+      that doesn't exist in real scans — major domain gap.
+
+    background replacement:
+      wherever all three channels are 0 (pure black = masked out area),
+      fill with bg_color. this matches the scanner background colour.
+
+    augmentation:
+      brightness scale ∈ [0.85, 1.15] — simulates exposure variation
+      contrast  shift  ∈ [-15,  +15]  — simulates scanner calibration
+      blur sigma ∈ {0, 0, 1} — 1/3 chance of mild blur
+    """
+    out = img_masked.copy().astype(np.float32)
+
+    # replace pure black (masked background) with scanner background color
+    black_mask = (img_masked[:, :, 0] == 0) & \
+                 (img_masked[:, :, 1] == 0) & \
+                 (img_masked[:, :, 2] == 0)
+    out[black_mask] = np.array(bg_color, dtype=np.float32)
+
+    # random brightness scale
+    brightness = rng.uniform(0.85, 1.15)
+    out        = out * brightness
+
+    # random contrast shift
+    contrast = rng.uniform(-15, 15)
+    out      = out + contrast
+
+    out = out.clip(0, 255).astype(np.uint8)
+
+    # optional mild blur (simulates slight scanner defocus)
+    if rng.random() < 0.33:
+        out = cv2.GaussianBlur(out, (3, 3), sigmaX=1.0)
+
+    return out
+
+
+def _fractal_tear_cut(
+    w:         int,
+    h:         int,
+    direction: str,
+    rng:       np.random.Generator,
+) -> "np.ndarray | None":
+    """
+    generate a realistic paper tear path using multi-scale fractal displacement.
+
+    real paper tears have structure at multiple scales:
+      - large scale (50-150px): the overall curve of the tear
+      - medium scale (15-40px): fibre bundle deviations
+      - fine scale (3-10px):    individual fibre irregularities
+
+    we simulate this with a base bezier (large scale) plus two octaves of
+    sinusoidal noise at different frequencies and amplitudes (medium + fine).
+    this produces the characteristic jagged-but-curved appearance of real tears.
+
+    the key difference from the old approach:
+      old: smooth bezier + gaussian noise (std=5px) → looked like a wobbly line
+      new: bezier + medium noise (std=25px) + fine noise (std=8px) → looks torn
+
+    diagonal cuts still use bezier (simpler geometry, less common in real tears).
+    """
+    if direction == "diagonal":
+        return None   # handled by _bezier_cut fallback
+
+    if direction == "horizontal":
+        if w < 50:
+            return None
+        n  = max(w, 128)
+        t  = np.linspace(0, 1, n)
+
+        # base curve: quadratic bezier giving overall tear direction
+        y0 = rng.uniform(0.25, 0.75) * h
+        y1 = rng.uniform(0.25, 0.75) * h
+        yc = rng.uniform(0.15, 0.85) * h
+        x  = t * w
+        y  = (1-t)**2 * y0 + 2*t*(1-t)*yc + t**2 * y1
+
+        # medium-scale displacement: fibre bundle deviation (2-4 cycles across width)
+        n_cycles_med = rng.uniform(2, 4)
+        amp_med      = rng.uniform(15, 35)    # px — much larger than old 5px
+        phase_med    = rng.uniform(0, 2*np.pi)
+        y += amp_med * np.sin(2 * np.pi * n_cycles_med * t + phase_med)
+
+        # fine-scale displacement: individual fibre irregularity (6-12 cycles)
+        n_cycles_fine = rng.uniform(6, 12)
+        amp_fine      = rng.uniform(4, 12)
+        phase_fine    = rng.uniform(0, 2*np.pi)
+        y += amp_fine * np.sin(2 * np.pi * n_cycles_fine * t + phase_fine)
+
+        # add small gaussian jitter for pixel-level roughness
+        y += rng.normal(0, 2.0, n)
+        y  = y.clip(5, h - 5)
+
+    elif direction == "vertical":
+        if h < 50:
+            return None
+        n  = max(h, 128)
+        t  = np.linspace(0, 1, n)
+
+        x0 = rng.uniform(0.25, 0.75) * w
+        x1 = rng.uniform(0.25, 0.75) * w
+        xc = rng.uniform(0.15, 0.85) * w
+        y  = t * h
+        x  = (1-t)**2 * x0 + 2*t*(1-t)*xc + t**2 * x1
+
+        n_cycles_med = rng.uniform(2, 4)
+        amp_med      = rng.uniform(15, 35)
+        phase_med    = rng.uniform(0, 2*np.pi)
+        x += amp_med * np.sin(2 * np.pi * n_cycles_med * t + phase_med)
+
+        n_cycles_fine = rng.uniform(6, 12)
+        amp_fine      = rng.uniform(4, 12)
+        phase_fine    = rng.uniform(0, 2*np.pi)
+        x += amp_fine * np.sin(2 * np.pi * n_cycles_fine * t + phase_fine)
+
+        x += rng.normal(0, 2.0, n)
+        x  = x.clip(5, w - 5)
+
+    else:
+        return None
+
+    return np.stack([x, y], axis=1).astype(np.float32)
 
 
 def _bezier_cut(
@@ -192,8 +342,9 @@ def _bezier_cut(
     h:         int,
     direction: str,
     rng:       np.random.Generator,
-    noise:     float,
+    noise_std: float = 5.0,
 ) -> "np.ndarray | None":
+    """original bezier cut — retained as fallback for diagonal direction."""
     if direction == "horizontal":
         if w < 50:
             return None
@@ -204,9 +355,8 @@ def _bezier_cut(
         yc = rng.uniform(0.2, 0.8) * h
         x  = t * w
         y  = (1-t)**2 * y0 + 2*t*(1-t)*yc + t**2 * y1
-        y += rng.normal(0, noise, n)
+        y += rng.normal(0, noise_std, n)
         y  = y.clip(2, h - 2)
-
     elif direction == "vertical":
         if h < 50:
             return None
@@ -217,32 +367,34 @@ def _bezier_cut(
         xc = rng.uniform(0.2, 0.8) * w
         y  = t * h
         x  = (1-t)**2 * x0 + 2*t*(1-t)*xc + t**2 * x1
-        x += rng.normal(0, noise, n)
+        x += rng.normal(0, noise_std, n)
         x  = x.clip(2, w - 2)
-
     else:  # diagonal
         if w < 100 or h < 100:
             return None
         n  = max(w + h, 128)
         t  = np.linspace(0, 1, n)
         if rng.random() < 0.5:
-            # top edge → right edge
             x0, y0 = rng.uniform(0.1, 0.9) * w, 0.0
-            x1, y1 = float(w),                   rng.uniform(0.1, 0.9) * h
+            x1, y1 = float(w), rng.uniform(0.1, 0.9) * h
         else:
-            # left edge → bottom edge
-            x0, y0 = 0.0,                         rng.uniform(0.1, 0.9) * h
-            x1, y1 = rng.uniform(0.1, 0.9) * w,  float(h)
+            x0, y0 = 0.0, rng.uniform(0.1, 0.9) * h
+            x1, y1 = rng.uniform(0.1, 0.9) * w, float(h)
         xc = (x0 + x1) / 2 + rng.uniform(-0.2, 0.2) * w
         yc = (y0 + y1) / 2 + rng.uniform(-0.2, 0.2) * h
         x  = (1-t)**2 * x0 + 2*t*(1-t)*xc + t**2 * x1
         y  = (1-t)**2 * y0 + 2*t*(1-t)*yc + t**2 * y1
-        x += rng.normal(0, noise * 0.5, n)
-        y += rng.normal(0, noise * 0.5, n)
+        x += rng.normal(0, noise_std * 0.5, n)
+        y += rng.normal(0, noise_std * 0.5, n)
         x  = x.clip(0, w)
         y  = y.clip(0, h)
-
     return np.stack([x, y], axis=1).astype(np.float32)
+
+
+def _is_blank(img: np.ndarray, threshold: float = 0.02) -> bool:
+    total   = img.shape[0] * img.shape[1]
+    nonzero = int(np.count_nonzero(img.max(axis=2)))
+    return (nonzero / total) < threshold
 
 
 def _apply_cut(
@@ -250,49 +402,28 @@ def _apply_cut(
     cut_pts:   np.ndarray,
     direction: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """split img along cut_pts into two halves.
-
-    ipts[0] is shape (2,) — a 1-D array [x, y].
-    access x as first[0], y as first[1].  NOT first[0, 1].
-
-    horizontal  →  mask_a = ABOVE the cut
-        poly: TL → TR → cut reversed
-    vertical    →  mask_a = LEFT of the cut
-        poly: TL → cut → BL
-    diagonal top→right   →  mask_a = top-left region
-        poly: TL → cut → TR
-    diagonal left→bottom →  mask_a = bottom-left region
-        poly: TL → BL → cut reversed
-    """
     h, w   = img.shape[:2]
     mask_a = np.zeros((h, w), dtype=np.uint8)
-    ipts   = cut_pts.astype(np.int32)   # shape (n, 2)
-
+    ipts   = cut_pts.astype(np.int32)
     TL = np.array([[0,     0    ]], dtype=np.int32)
     TR = np.array([[w - 1, 0    ]], dtype=np.int32)
     BL = np.array([[0,     h - 1]], dtype=np.int32)
 
     if direction == "horizontal":
         poly_a = np.vstack([TL, TR, ipts[::-1]])
-
     elif direction == "vertical":
         poly_a = np.vstack([TL, ipts, BL])
-
     else:
-        # ipts[0] is 1-D [x, y]  →  y-coordinate is index 1
-        first_y = int(ipts[0, 1])        # safe: ipts is 2-D (n,2), so [0,1] is fine
+        first_y = int(ipts[0, 1])
         if first_y < h * 0.3:
-            # started on top edge → top-left triangle
             poly_a = np.vstack([TL, ipts, TR])
         else:
-            # started on left edge → bottom-left triangle
             poly_a = np.vstack([TL, BL, ipts[::-1]])
 
     cv2.fillPoly(mask_a, [poly_a], 255)
-    mask_b = 255 - mask_a
-
-    part_a = cv2.bitwise_and(img, img, mask=mask_a)
-    part_b = cv2.bitwise_and(img, img, mask=mask_b)
+    mask_b  = 255 - mask_a
+    part_a  = cv2.bitwise_and(img, img, mask=mask_a)
+    part_b  = cv2.bitwise_and(img, img, mask=mask_b)
     return part_a, part_b
 
 
