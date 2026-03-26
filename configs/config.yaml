@@ -1,0 +1,57 @@
+# configs/config.yaml
+
+pipeline:
+  input_dir:    "data/raw"
+  output_image: "data/reconstruction.tiff"
+  debug_dir:    "data/debug"
+
+segmentation:
+  method:            "threshold"
+  min_fragment_area: 0.01
+  max_fragment_area: 0.95
+  min_solidity:      0.20
+  max_aspect_ratio:  10.0
+  contour_n_points:  512
+  clahe_equalise:    true
+  otsu_offset:       +15
+  morph_close_size:  7
+  morph_close_iters: 3
+  morph_open_size:   5
+  morph_open_iters:  2
+  watershed_dist_thresh: 0.3
+  watershed_min_dist:    20
+
+matching:
+  method:     "geometry"
+  top_k:      10
+
+registration:
+  ransac_iters:      3000
+  # ransac_inlier_thr: contour points are centroid-relative, spanning ~±500px.
+  # 8px tolerance = ~1.6% of fragment width — tight enough to reject noise,
+  # loose enough to tolerate small segmentation imprecision on the tear edge.
+  ransac_inlier_thr: 5.0
+  min_inliers:       4
+  min_score:         0.35  # paper uses 0.45; 0.35 is slightly permissive for first run
+
+solver:
+  method:       "pgo"
+  pgo_max_iter: 500
+  pgo_tol:      0.000001
+
+rendering:
+  method:           "simple"
+  canvas_padding:   60
+  background_color: [255, 255, 255]
+
+training:
+  data_dir:          "data/training_docs"
+  out_dir:           "data/training_fragments"
+  fragments_per_doc: 6
+  noise_std:         5.0
+  batch_size:        8
+  accum_steps:       4
+  lr:                0.0001
+  epochs:            20
+  temperature:       0.07
+  checkpoint_dir:    "checkpoints"

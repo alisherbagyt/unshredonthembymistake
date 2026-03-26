@@ -1,0 +1,39 @@
+# unshred-on-them-by-mistake — requirements for Python 3.12 + RTX 3050
+# install order matters — run the commands in README / setup notes below,
+# do NOT just pip install -r requirements.txt directly (torch needs its own index).
+#
+# ── setup commands (run these in order in your new venv) ──────────────────────
+#
+#   1. pip install --upgrade pip
+#
+#   2. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#      (cu124 = CUDA 12.4 — compatible with driver 581.57 / CUDA runtime 13.0)
+#
+#   3. pip install -r requirements.txt
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# core cv
+opencv-python>=4.10.0
+
+# numerical
+numpy>=2.0.0
+scipy>=1.13.0
+
+# retrieval — use faiss-gpu if available for your cuda, else cpu is fine for dev
+# faiss-gpu wheels for cu12 are on conda; pip only has cpu builds
+faiss-cpu>=1.8.0
+
+# config
+pyyaml>=6.0.2
+
+# progress bar (used by trainer.py)
+tqdm>=4.66.0
+
+# testing
+pytest>=8.0.0
+
+# ── note: torch + torchvision installed separately via cu124 index (step 2) ──
+# ── optional / future ─────────────────────────────────────────────────────────
+# kornia>=0.7.0         # differentiable cv ops
+# hydra-core>=1.3.0     # advanced config composition
